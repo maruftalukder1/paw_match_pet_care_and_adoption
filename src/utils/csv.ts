@@ -27,9 +27,15 @@ export function formatCsvValue(value: CsvValue): string {
  * Escape one field per RFC-4180: if it contains a comma, double quote,
  * carriage return or line feed, wrap it in double quotes and double any
  * internal quotes.
+ *
+ * Security: a leading `' ` text marker neutralises CSV formula injection
+ * (a cell like `=cmd|...` would otherwise execute when the file is opened
+ * in Excel). Excel treats the marker as a text indicator and does not
+ * display it, so the visible content is unchanged.
  */
 export function escapeCsvField(value: CsvValue): string {
-  const text = formatCsvValue(value);
+  let text = formatCsvValue(value);
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
   if (/[",\r\n]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }

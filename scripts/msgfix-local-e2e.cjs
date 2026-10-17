@@ -29,7 +29,16 @@ const check = (label, ok, extra = '') => {
     // Local-mode build sanity: header badge says "Local".
     check(`[${vp.width}] boots in local/demo mode`, await page.getByText('Local', { exact: true }).first().isVisible().catch(() => false));
 
-    // Logout (app auto-logs in as Jaann on first visit).
+    // AUTHFIX2: fresh boot lands LOGGED OUT (the old auto-login as Jaann is
+    // gone by design). Log in as Jaann explicitly, then log out so the
+    // register-a-new-user path starts clean.
+    await page.locator('header').getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.waitForTimeout(400);
+    await page.getByPlaceholder('Email or username').fill('jaann@pawmatch.com');
+    await page.getByPlaceholder('Your password').fill('user123');
+    await page.getByRole('button', { name: 'Log In' }).last().click();
+    await page.waitForTimeout(1400);
+    check(`[${vp.width}] boots logged out; Jaann login works`, (await page.locator('header').getByRole('button', { name: /Jaann Rahman/ }).count()) >= 1);
     await page.locator('header').getByRole('button', { name: /Jaann Rahman/ }).click();
     await page.waitForTimeout(400);
     await page.getByText('Log Out', { exact: true }).click();

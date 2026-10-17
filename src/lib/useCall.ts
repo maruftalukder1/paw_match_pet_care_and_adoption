@@ -187,6 +187,8 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  /** True while our own accept is acquiring media — guards double-tap Accept. */
+  const acceptInFlightRef = useRef(false);
   /** inviteIds already processed — dedupes the dual-channel (call:/user:) invite. */
   const seenInvitesRef = useRef<Set<string>>(new Set());
   /** True when this side placed the call — only the caller writes calllogs. */
@@ -327,6 +329,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     stopTicker();
     clearDisconnectGrace();
     iceRestartedRef.current = false;
+    acceptInFlightRef.current = false;
     pendingIceRef.current = [];
     stopTracks(localStreamRef.current);
     localStreamRef.current = null;
@@ -452,7 +455,11 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         }
       };
       pc.ontrack = (e) => {
-        const stream = e.streams[0];
+        // Most browsers populate e.streams[0] for addTrack(track, stream);
+        // the fallback covers track events that arrive without a stream
+        // (seen on some mobile browsers) so the remote view never stays
+        // black despite a connected call.
+        const stream = e.streams[0] ?? (e.track ? new MediaStream([e.track]) : null);
         if (stream) setRemoteStream(stream);
       };
       pc.onconnectionstatechange = () => {
@@ -647,8 +654,10 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
           break;
         }
         case 'accept': {
-          // Caller side only.
-          if (!isCallerRef.current || st.phase !== 'outgoing') return;
+          // Caller side only. The pcRef guard drops a duplicate 'accept'
+          // (double-tap / retransmit) that would otherwise build a second
+          // peer connection and leak the first call's tracks.
+          if (!isCallerRef.current || st.phase !== 'outgoing' || pcRef.current) return;
           if (p.fromId !== st.peerId) return;
           clearNoAnswerTimer();
           void setupCaller(p);
@@ -956,6 +965,10 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
   const acceptCall = useCallback(() => {
     const st = stateRef.current;
     if (st.phase !== 'incoming' || !st.conversationId || !st.peerId) return;
+    // Double-tap guard: a second tap while media is still being acquired
+    // would orphan the first stream (mute would silently stop working).
+    if (acceptInFlightRef.current) return;
+    acceptInFlightRef.current = true;
     const kind = st.callType ?? 'audio';
     void acquireMedia(kind)
       .then((stream) => {
@@ -971,6 +984,9 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         isCallerRef.current = false;
         teardown();
         patch({ ...IDLE_CALL, error: MEDIA_UNAVAILABLE_ERROR });
+      })
+      .finally(() => {
+        acceptInFlightRef.current = false;
       });
   }, [acquireMedia, basePayload, patch, sendSignal, setLocalStream, teardown]);
 

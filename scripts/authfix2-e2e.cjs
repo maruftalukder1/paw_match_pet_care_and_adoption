@@ -9,9 +9,18 @@
  *   UI, and submitting shows an honest invalid/expired error (not a dead end).
  */
 const { chromium } = require('playwright-core');
+const fs = require('fs');
 
 const BASE = 'http://localhost:4173';
 const IMG = '/tmp/authfix2-pet.png';
+// Self-sufficient fixture: a tiny valid PNG (1x1 white) for the photo-upload
+// steps, written when missing (same pattern as fullsync-local-e2e.cjs).
+if (!fs.existsSync(IMG)) {
+  fs.writeFileSync(IMG, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  ));
+}
 let failures = 0;
 const check = (label, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra ? '  ' + extra : ''}`);
@@ -57,10 +66,11 @@ const openDrawer = async (page) => {
   const chipCount = await page.locator('header').getByRole('button', { name: /Jaann|Hasan/ }).count();
   check('D2 first visit: no demo user chip', chipCount === 0);
 
-  // Browsing works logged out.
+  // Browsing works logged out. (Live mode fetches pets from Supabase, so
+  // wait for the listing card explicitly instead of a fixed sleep.)
   await openDrawer(page);
   await page.locator('header').getByRole('button', { name: 'Find Pets', exact: true }).click();
-  await page.waitForTimeout(600);
+  await page.getByRole('heading', { name: 'Bruno', exact: true }).first().waitFor({ timeout: 15000 });
   check('D2 logged-out browsing: pet listings render', (await page.getByText('Bruno').count()) >= 1);
   const brunoListingCard = (pg) =>
     pg.locator('div.group', { has: pg.getByRole('heading', { name: 'Bruno', exact: true }) });
@@ -195,7 +205,9 @@ const openDrawer = async (page) => {
   await openDrawer(page);
   await page.locator('header').getByRole('button', { name: 'Find Pets', exact: true }).click();
   await page.waitForTimeout(700);
-  const listingImgs = await page.locator('img[alt="Bruno"]').all();
+  // Listing cards use alt="<Name> the <Breed>" (a11y), so match by substring
+  // like the detail-modal check below.
+  const listingImgs = await page.locator('img[alt*="Bruno"]').all();
   let listingOk = false;
   for (const im of listingImgs) {
     const s = await im.getAttribute('src');
