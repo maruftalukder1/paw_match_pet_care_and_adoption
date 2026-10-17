@@ -101,10 +101,24 @@ export interface UserInvitePayload {
 }
 
 const NO_ANSWER_TIMEOUT_MS = 30_000;
+/** How long a 'disconnected' state may persist before we attempt an ICE restart. */
+const DISCONNECT_GRACE_MS = 5_000;
 
+/**
+ * STUN is not enough on its own: behind carrier-grade / symmetric NAT —
+ * common on Bangladeshi mobile networks — STUN-only ICE cannot find a
+ * peer-to-peer path, so signaling (ring/accept) works but media stays
+ * silent. The Open Relay entries below are free community TURN relays
+ * (no account needed); when a direct path fails, media is relayed through
+ * them. Demo-grade: a production deployment should use dedicated TURN
+ * credentials (e.g. its own coturn or a paid allocation).
+ */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
 
 const MEDIA_UNAVAILABLE_ERROR =
@@ -177,6 +191,14 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
   const seenInvitesRef = useRef<Set<string>>(new Set());
   /** True when this side placed the call — only the caller writes calllogs. */
   const isCallerRef = useRef(false);
+  /**
+   * ICE-restart hardening: at most ONE pc.restartIce() per peer connection
+   * (reset when a new PC is created). A second 'failed' therefore surfaces
+   * the failure instead of looping forever.
+   */
+  const iceRestartedRef = useRef(false);
+  /** Grace timer for transient 'disconnected' states before we treat them as failure. */
+  const disconnectGraceRef = useRef<number | null>(null);
 
   currentUserRef.current = currentUser;
   conversationsRef.current = conversations;
@@ -208,6 +230,14 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     if (noAnswerTimerRef.current !== null) {
       window.clearTimeout(noAnswerTimerRef.current);
       noAnswerTimerRef.current = null;
+    }
+  }, []);
+
+  /** Cancel a pending 'disconnected' grace period (healthy again or torn down). */
+  const clearDisconnectGrace = useCallback(() => {
+    if (disconnectGraceRef.current !== null) {
+      window.clearTimeout(disconnectGraceRef.current);
+      disconnectGraceRef.current = null;
     }
   }, []);
 
@@ -295,6 +325,8 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
   const teardown = useCallback(() => {
     clearNoAnswerTimer();
     stopTicker();
+    clearDisconnectGrace();
+    iceRestartedRef.current = false;
     pendingIceRef.current = [];
     stopTracks(localStreamRef.current);
     localStreamRef.current = null;
@@ -308,7 +340,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       }
       pcRef.current = null;
     }
-  }, [clearNoAnswerTimer, stopTicker]);
+  }, [clearNoAnswerTimer, clearDisconnectGrace, stopTicker]);
 
   const resetCall = useCallback(
     (error: string | null = null) => {
@@ -372,6 +404,45 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     (peerId: string, convId: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       pcRef.current = pc;
+      // One ICE restart is allowed per peer connection; a fresh PC resets it.
+      iceRestartedRef.current = false;
+
+      /**
+       * One-shot ICE restart for a struggling connection: restarts ICE
+       * gathering on the SAME peer connection and, for the caller, sends a
+       * fresh offer so both sides renegotiate through a (usually
+       * TURN-relayed) path. Returns false when a restart was already
+       * attempted — the caller then surfaces the failure instead of looping.
+       */
+      const attemptIceRestart = (): boolean => {
+        if (iceRestartedRef.current || pcRef.current !== pc) return false;
+        iceRestartedRef.current = true;
+        try {
+          pc.restartIce();
+        } catch {
+          return false;
+        }
+        if (isCallerRef.current) {
+          const st = stateRef.current;
+          if (st.peerId && st.conversationId) {
+            const { peerId: pId, conversationId: cId } = st;
+            void (async () => {
+              try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                sendSignal(cId, {
+                  ...basePayload(cId, pId, 'offer'),
+                  sdp: offer,
+                });
+              } catch {
+                doEnd('Connection lost — the call has ended.');
+              }
+            })();
+          }
+        }
+        return true;
+      };
+
       pc.onicecandidate = (e) => {
         if (e.candidate) {
           sendSignal(convId, {
@@ -385,15 +456,41 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         if (stream) setRemoteStream(stream);
       };
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          // Surface the error AND end the call (which sends 'end' and, as
-          // caller, logs a completed calllog up to this point).
-          doEnd('Connection lost — the call has ended.');
+        const state = pc.connectionState;
+        if (state === 'connected') {
+          // Healthy (or recovered) — cancel any pending disconnect grace.
+          clearDisconnectGrace();
+          return;
         }
+        if (state === 'failed') {
+          if (!attemptIceRestart()) {
+            // Restart already tried (or the PC is stale) — surface it.
+            doEnd('Connection lost — the call has ended.');
+          }
+          return;
+        }
+        if (state === 'disconnected') {
+          // Brief blips are normal while ICE re-checks; act only if the
+          // connection stays down past a short grace period.
+          clearDisconnectGrace();
+          disconnectGraceRef.current = window.setTimeout(() => {
+            disconnectGraceRef.current = null;
+            if (
+              pcRef.current === pc &&
+              (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')
+            ) {
+              if (!attemptIceRestart()) {
+                doEnd('Connection lost — the call has ended.');
+              }
+            }
+          }, DISCONNECT_GRACE_MS);
+          return;
+        }
+        // 'new' / 'connecting' / 'closed': nothing to do here.
       };
       return pc;
     },
-    [basePayload, doEnd, sendSignal, setRemoteStream],
+    [basePayload, clearDisconnectGrace, doEnd, sendSignal, setRemoteStream],
   );
 
   const acquireMedia = useCallback(async (kind: CallKind): Promise<MediaStream> => {
@@ -443,6 +540,32 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       }
     },
     [basePayload, createPeerConnection, doEnd, sendSignal],
+  );
+
+  /**
+   * Callee side of an ICE-restart re-offer: the caller re-offers on the SAME
+   * peer connection, so the re-offer is answered on that live PC instead of
+   * building a fresh one (which would drop the restarted ICE gathering).
+   */
+  const handleReoffer = useCallback(
+    async (sdp: RTCSessionDescriptionInit) => {
+      const pc = pcRef.current;
+      const st = stateRef.current;
+      if (!pc || !st.peerId || !st.conversationId) return;
+      try {
+        await pc.setRemoteDescription(sdp);
+        await flushPendingIce();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal(st.conversationId, {
+          ...basePayload(st.conversationId, st.peerId, 'answer'),
+          sdp: answer,
+        });
+      } catch {
+        doEnd('Connection lost — the call has ended.');
+      }
+    },
+    [basePayload, doEnd, flushPendingIce, sendSignal],
   );
 
   // ---- callee: offer received → create answer ----
@@ -533,24 +656,33 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         }
         case 'offer': {
           // Callee side only.
-          if (isCallerRef.current || st.phase !== 'incoming') return;
-          if (p.fromId !== st.peerId) return;
+          if (isCallerRef.current || p.fromId !== st.peerId || !p.sdp) return;
+          if ((st.phase === 'incoming' || st.phase === 'in-call') && pcRef.current) {
+            // ICE-restart re-offer on the live connection — answer in place.
+            void handleReoffer(p.sdp);
+            return;
+          }
+          if (st.phase !== 'incoming') return;
           void setupCallee(p);
           break;
         }
         case 'answer': {
-          // Caller side only.
-          if (!isCallerRef.current || st.phase !== 'outgoing') return;
-          if (p.fromId !== st.peerId || !p.sdp) return;
+          // Caller side only: the initial answer (phase 'outgoing'), or the
+          // re-answer to our ICE-restart re-offer (phase 'in-call').
+          if (!isCallerRef.current || p.fromId !== st.peerId || !p.sdp) return;
+          const wasOutgoing = st.phase === 'outgoing';
+          if (!wasOutgoing && st.phase !== 'in-call') return;
           const pc = pcRef.current;
           if (!pc) return;
           void (async () => {
             try {
               await pc.setRemoteDescription(p.sdp!);
               await flushPendingIce();
-              // Talk time starts now for the caller.
-              patch({ phase: 'in-call', seconds: 0 });
-              startTicker();
+              if (wasOutgoing) {
+                // Talk time starts now for the caller.
+                patch({ phase: 'in-call', seconds: 0 });
+                startTicker();
+              }
             } catch {
               doEnd('Could not start the call — please try again.');
             }
@@ -621,6 +753,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       clearNoAnswerTimer,
       doEnd,
       flushPendingIce,
+      handleReoffer,
       patch,
       resetCall,
       sendSignal,
