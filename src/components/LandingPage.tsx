@@ -17,7 +17,6 @@ import {
   Home,
   Quote,
   ChevronDown,
-  Star,
   Users,
   Building2,
   CalendarCheck,
@@ -110,8 +109,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const applicationCount = applications.length;
   const shelterCount = users.filter((u) => u.role === 'shelter').length;
   const serviceCount = services.length;
-  const topRatedService =
-    services.length > 0 ? services.reduce((a, b) => (a.rating >= b.rating ? a : b)) : null;
 
   const stats = [
     { icon: PawPrint, value: String(availablePets), label: 'Pets waiting for homes', chip: 'bg-emerald-100 text-emerald-700' },
@@ -192,10 +189,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <PawPrint className="pm-hero-paw w-7 h-7 bottom-[10%] right-[38%]" style={{ animationDelay: '-5.6s', animationDuration: '7.8s' }} />
         </div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+          <div className="flex flex-col items-center">
             {/* Left Column: Headlines & Search */}
             <motion.div
-              className="lg:col-span-7 space-y-6 text-left"
+              className="w-full max-w-3xl space-y-6 text-center"
               initial="hidden"
               animate="show"
               variants={{ hidden: {}, show: { transition: { staggerChildren: 0.09 } } }}
@@ -224,7 +221,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
               <motion.p
                 variants={{ hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0 } }}
-                className="text-lg text-slate-600 max-w-xl leading-relaxed"
+                className="text-lg text-slate-600 max-w-xl mx-auto leading-relaxed"
               >
                 Adopt. Care. Connect. A better tomorrow for every pet in your local community.
                 Connect with verified shelters, owners, vets, and pet specialists near you.
@@ -232,7 +229,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
               {/* Search Bar Input */}
               <form onSubmit={handleSearchSubmit} className="pt-2">
-                <div className="flex items-center p-1.5 bg-white rounded-2xl shadow-lg border border-slate-200 focus-within:ring-2 focus-within:ring-emerald-500 max-w-xl transition-all">
+                <div className="flex items-center p-1.5 bg-white rounded-2xl shadow-lg border border-slate-200 focus-within:ring-2 focus-within:ring-emerald-500 max-w-xl mx-auto transition-all">
                   <div className="pl-3.5 pr-2 text-slate-400">
                     <Search className="w-5 h-5" />
                   </div>
@@ -256,7 +253,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   + secondary matchmaker path, both with ≥44px tap targets */}
               <motion.div
                 variants={{ hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0 } }}
-                className="flex flex-wrap items-center gap-3 pt-1"
+                className="flex flex-wrap items-center justify-center gap-3 pt-1"
               >
                 <button onClick={() => onNavigateTab('pets')} className="pm-btn-primary">
                   <PawPrint className="w-4 h-4" />
@@ -275,7 +272,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </motion.div>
 
               {/* Quick Tags */}
-              <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-xs text-slate-500">
                 <span className="font-semibold text-slate-700">Popular:</span>
                 {['Labrador', 'Persian Cat', 'Puppy', 'Mirpur', 'Uttara', 'Rabbit'].map((tag) => (
                   <button
@@ -292,7 +289,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
 
               {/* Floating animated icon chips — always gently moving */}
-              <div className="flex flex-wrap items-center gap-2.5 pt-3" aria-hidden="true">
+              <div className="flex flex-wrap items-center justify-center gap-2.5 pt-3" aria-hidden="true">
                 {[
                   { Icon: PawPrint, label: 'Adopt', chip: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
                   { Icon: Heart, label: 'Care', chip: 'text-rose-600 bg-rose-50 border-rose-200' },
@@ -313,68 +310,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
             </motion.div>
 
-            {/* Right Column: Live stat-card cluster (hero photo removed entirely
-                per Maruf's choice — the hero is now headline + animated real-data
-                cards on the gradient background). */}
-            <div className="lg:col-span-5 relative">
-              <div className="relative mx-auto max-w-md lg:max-w-none h-[380px] sm:h-[430px]">
-                {/* Soft glow backdrop so the cluster reads as a designed panel */}
-                <div
-                  className="absolute inset-x-6 top-8 bottom-8 rounded-[2.5rem] bg-gradient-to-br from-emerald-100/80 via-teal-50 to-amber-50/60 blur-2xl"
-                  aria-hidden="true"
-                />
-                <PawPrint
-                  className="pm-hero-paw w-24 h-24 top-[36%] left-[36%] text-emerald-200/70"
-                  style={{ animationDelay: '-3.2s', animationDuration: '8s' }}
-                  aria-hidden="true"
-                />
-
-                {/* Cluster Card 0 — real shelter count from the app's data */}
-                <motion.div
-                  animate={reduceMotion ? undefined : { y: [0, -10, 0] }}
-                  transition={{ repeat: Infinity, duration: 5, ease: 'easeInOut', delay: 1.1 }}
-                  className="absolute top-2 left-0 sm:left-4 bg-white/95 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5 max-w-[215px]"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
-                    <Building2 className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-slate-900 whitespace-nowrap">{shelterCount} Verified Shelters</div>
-                    <div className="text-[11px] text-slate-500">trusted local partners</div>
-                  </div>
-                </motion.div>
-
-                {/* Cluster Card 1 — real top-rated service from the app's data */}
-                <motion.div
-                  animate={reduceMotion ? undefined : { y: [0, 12, 0] }}
-                  transition={{ repeat: Infinity, duration: 4.6, ease: 'easeInOut', delay: 0.6 }}
-                  className="absolute top-[37%] right-0 sm:right-4 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center">
-                    <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                  </div>
-                  <div className="text-left">
-                    <div className="text-xs font-bold text-slate-900">{topRatedService?.rating}★ Top-Rated Service</div>
-                    <div className="text-[10px] text-slate-500">{topRatedService?.providerName}</div>
-                  </div>
-                </motion.div>
-
-                {/* Cluster Card 2 — real available-pets count from the app's data */}
-                <motion.div
-                  animate={reduceMotion ? undefined : { y: [0, -12, 0] }}
-                  transition={{ repeat: Infinity, duration: 4, ease: 'easeInOut' }}
-                  className="absolute bottom-2 left-[6%] sm:left-[12%] bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base">
-                    ✓
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-slate-900">{availablePets} Available Pets</div>
-                    <div className="text-[11px] text-slate-500">Across Dhaka communities</div>
-                  </div>
-                </motion.div>
-              </div>
-            </div>
           </div>
         </div>
       </section>
