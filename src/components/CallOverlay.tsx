@@ -82,6 +82,31 @@ export default function CallOverlay({
 }: CallOverlayProps) {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  // Dedicated sink for VOICE calls: the remote <video> below only renders in
+  // the video-call branch, so without this audio-call users could NEVER hear
+  // the other side (stream attached to a non-existent element).
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  // Autoplay-policy fallback flag: set when a play() is rejected, cleared per
+  // call/phase so each new call gets a fresh attempt.
+  const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
+
+  const playWithTapFallback = (el: HTMLMediaElement) => {
+    el.play().catch(() => setNeedsTapToPlay(true));
+  };
+
+  const handleTapToPlay = () => {
+    const el =
+      call.callType === 'video' ? remoteVideoRef.current : remoteAudioRef.current;
+    if (!el) return;
+    el.play().then(
+      () => setNeedsTapToPlay(false),
+      () => {} // still blocked — leave the button up
+    );
+  };
+
+  useEffect(() => {
+    setNeedsTapToPlay(false);
+  }, [call.phase, call.callType]);
 
   // Display-only seconds timer. The machine tracks seconds silently in a ref
   // (for calllog duration + DEV diag) without re-rendering, so this overlay —
@@ -96,11 +121,24 @@ export default function CallOverlay({
     }
   }, [call.phase]);
 
-  // Attach remote stream to the <video> element.
+  // Attach remote stream to the <video> element (video calls only — that
+  // element never renders in a voice-call branch).
   useEffect(() => {
     const el = remoteVideoRef.current;
-    if (el) el.srcObject = call.remoteStream;
+    if (!el) return;
+    el.srcObject = call.remoteStream;
+    if (call.remoteStream) playWithTapFallback(el);
   }, [call.remoteStream, call.phase]);
+
+  // Attach remote stream to the dedicated <audio> element for VOICE calls.
+  // Keep it empty on video calls so the same stream never plays twice.
+  useEffect(() => {
+    const el = remoteAudioRef.current;
+    if (!el) return;
+    const isAudioCall = call.callType === 'audio';
+    el.srcObject = isAudioCall ? call.remoteStream : null;
+    if (isAudioCall && call.remoteStream) playWithTapFallback(el);
+  }, [call.remoteStream, call.phase, call.callType]);
 
   // Attach local stream to the PiP <video> element.
   useEffect(() => {
@@ -112,6 +150,7 @@ export default function CallOverlay({
   useEffect(() => {
     return () => {
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
       if (localVideoRef.current) localVideoRef.current.srcObject = null;
     };
   }, [call.phase]);
@@ -320,6 +359,10 @@ export default function CallOverlay({
       aria-label="Call"
     >
       <style>{`@keyframes pm-eq { 0%, 100% { transform: scaleY(0.25); } 50% { transform: scaleY(1); } }`}</style>
+      {/* Remote audio sink for voice calls (invisible). Mounted for the whole
+          dialog so it exists across phases; kept empty on video calls to avoid
+          double audio with the remote <video>. */}
+      <audio ref={remoteAudioRef} autoPlay className="hidden" />
       <motion.div
         initial={{ opacity: 0, scale: 0.94, y: 14 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -328,6 +371,17 @@ export default function CallOverlay({
         className="w-[min(430px,94vw)] overflow-hidden rounded-3xl bg-white shadow-2xl"
       >
         <AnimatePresence mode="wait">{renderBody()}</AnimatePresence>
+        {needsTapToPlay && !call.error && (
+          <div className="flex justify-center px-8 pb-5">
+            <button
+              type="button"
+              onClick={handleTapToPlay}
+              className="flex items-center gap-2 rounded-full bg-amber-100 px-5 py-2.5 text-sm font-semibold text-amber-800 shadow transition hover:bg-amber-200"
+            >
+              <span aria-hidden="true">🔊</span> Tap for sound
+            </button>
+          </div>
+        )}
       </motion.div>
     </div>
   );
