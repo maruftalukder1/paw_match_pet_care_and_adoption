@@ -313,25 +313,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
             </motion.div>
 
-            {/* Right Column: Hero Visual Asset */}
+            {/* Right Column: Live stat-card cluster (hero photo removed entirely
+                per Maruf's choice — the hero is now headline + animated real-data
+                cards on the gradient background). */}
             <div className="lg:col-span-5 relative">
-              <div className="relative mx-auto max-w-md lg:max-w-none">
-                <div className="aspect-4/3 rounded-3xl overflow-hidden shadow-2xl border-4 border-white bg-slate-100">
-                  <PetImage
-                    src="https://images.unsplash.com/photo-1552053831-71594a27632d?w=800&auto=format&fit=crop&q=80"
-                    alt="Happy adopted golden retriever dog"
-                    eager
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+              <div className="relative mx-auto max-w-md lg:max-w-none h-[380px] sm:h-[430px]">
+                {/* Soft glow backdrop so the cluster reads as a designed panel */}
+                <div
+                  className="absolute inset-x-6 top-8 bottom-8 rounded-[2.5rem] bg-gradient-to-br from-emerald-100/80 via-teal-50 to-amber-50/60 blur-2xl"
+                  aria-hidden="true"
+                />
+                <PawPrint
+                  className="pm-hero-paw w-24 h-24 top-[36%] left-[36%] text-emerald-200/70"
+                  style={{ animationDelay: '-3.2s', animationDuration: '8s' }}
+                  aria-hidden="true"
+                />
 
-                {/* Floating Metric Card 0 — real shelter count from the app's data.
-                    On small screens the three cards share a narrow canvas, so
-                    the rating card sits BELOW this one instead of beside it. */}
+                {/* Cluster Card 0 — real shelter count from the app's data */}
                 <motion.div
-                  animate={{ y: [0, -8, 0] }}
+                  animate={reduceMotion ? undefined : { y: [0, -10, 0] }}
                   transition={{ repeat: Infinity, duration: 5, ease: 'easeInOut', delay: 1.1 }}
-                  className="absolute -top-5 left-2 sm:-top-6 sm:left-6 bg-white/95 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5 max-w-[215px]"
+                  className="absolute top-2 left-0 sm:left-4 bg-white/95 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5 max-w-[215px]"
                 >
                   <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
                     <Building2 className="w-4 h-4" />
@@ -342,26 +344,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   </div>
                 </motion.div>
 
-                {/* Floating Metric Card 1 — real count from the app's data */}
+                {/* Cluster Card 1 — real top-rated service from the app's data */}
                 <motion.div
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ repeat: Infinity, duration: 4, ease: 'easeInOut' }}
-                  className="absolute -bottom-6 -left-6 bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base">
-                    ✓
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-slate-900">{availablePets} Available Pets</div>
-                    <div className="text-[11px] text-slate-500">Across Dhaka communities</div>
-                  </div>
-                </motion.div>
-
-                {/* Floating Metric Card 2 — real top-rated service from the app's data */}
-                <motion.div
-                  animate={{ y: [0, 10, 0] }}
+                  animate={reduceMotion ? undefined : { y: [0, 12, 0] }}
                   transition={{ repeat: Infinity, duration: 4.6, ease: 'easeInOut', delay: 0.6 }}
-                  className="absolute top-[3.75rem] right-2 sm:-top-4 sm:right-auto sm:-right-4 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5"
+                  className="absolute top-[37%] right-0 sm:right-4 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-2.5"
                 >
                   <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center">
                     <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
@@ -369,6 +356,21 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   <div className="text-left">
                     <div className="text-xs font-bold text-slate-900">{topRatedService?.rating}★ Top-Rated Service</div>
                     <div className="text-[10px] text-slate-500">{topRatedService?.providerName}</div>
+                  </div>
+                </motion.div>
+
+                {/* Cluster Card 2 — real available-pets count from the app's data */}
+                <motion.div
+                  animate={reduceMotion ? undefined : { y: [0, -12, 0] }}
+                  transition={{ repeat: Infinity, duration: 4, ease: 'easeInOut' }}
+                  className="absolute bottom-2 left-[6%] sm:left-[12%] bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-100 flex items-center gap-3"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base">
+                    ✓
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">{availablePets} Available Pets</div>
+                    <div className="text-[11px] text-slate-500">Across Dhaka communities</div>
                   </div>
                 </motion.div>
               </div>
