@@ -1,0 +1,13 @@
+# PawMatch — gitignore
+node_modules/
+dist/
+dist-file/
+*.local
+.env.local
+.hidden-*/
+hidden_sweep_shots/
+verify-shots/
+phase2-evidence/
+e2e-worker-c/
+*.log
+.DS_Store

@@ -1,0 +1,6 @@
+{
+  "name": "PawMatch - Local Pet Care & Adoption Matchmaker",
+  "description": "Local Pet Care & Adoption Matchmaker connecting adopters, pet owners, shelters, vets, and service providers with intelligent matchmaking, adoption workflow, healthcare, and lost & found.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
