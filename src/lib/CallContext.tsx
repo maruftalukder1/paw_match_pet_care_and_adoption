@@ -27,7 +27,14 @@ import React, {
 } from 'react';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
-import { useCall, type CallKind, type StartCallResult, type CallState } from './useCall';
+import {
+  useCall,
+  type CallKind,
+  type StartCallResult,
+  type CallState,
+  type FlipCameraResult,
+  type ScreenShareResult,
+} from './useCall';
 import type { Conversation, MessageAttachment } from '../types';
 import CallOverlay from '../components/CallOverlay';
 
@@ -40,6 +47,12 @@ export interface CallActions {
   endCall: () => void;
   toggleMute: () => void;
   toggleCamera: () => void;
+  /** Front/back camera swap (video calls). */
+  flipCamera: () => Promise<FlipCameraResult>;
+  /** Screen-share toggle (video calls, desktop browsers). */
+  toggleScreenShare: () => Promise<ScreenShareResult>;
+  /** Route remote audio to a chosen output device (setSinkId-capable browsers). */
+  setAudioOutputDevice: (deviceId: string) => void;
   /** Online user ids from the live presence channel. Empty in local mode. */
   onlineIds: Set<string>;
   /** True when presence tracking is active (logged in + live mode). */
@@ -218,6 +231,9 @@ export function CallProvider({
       endCall: machine.endCall,
       toggleMute: machine.toggleMute,
       toggleCamera: machine.toggleCamera,
+      flipCamera: machine.flipCamera,
+      toggleScreenShare: machine.toggleScreenShare,
+      setAudioOutputDevice: machine.setAudioOutputDevice,
       onlineIds,
       presenceLive,
     }),
@@ -229,6 +245,9 @@ export function CallProvider({
       machine.endCall,
       machine.toggleMute,
       machine.toggleCamera,
+      machine.flipCamera,
+      machine.toggleScreenShare,
+      machine.setAudioOutputDevice,
       onlineIds,
       presenceLive,
     ],
@@ -245,6 +264,9 @@ export function CallProvider({
           onEnd={machine.endCall}
           onToggleMute={machine.toggleMute}
           onToggleCamera={machine.toggleCamera}
+          onFlipCamera={machine.flipCamera}
+          onToggleScreenShare={machine.toggleScreenShare}
+          onSetAudioOutput={machine.setAudioOutputDevice}
         />
       </CallStateContext.Provider>
     </CallContext.Provider>

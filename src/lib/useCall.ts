@@ -26,6 +26,15 @@ import type { Conversation, MessageAttachment } from '../types';
 export type CallPhase = 'idle' | 'outgoing' | 'incoming' | 'in-call';
 export type CallKind = 'audio' | 'video';
 
+/** A selectable audio-output (speaker) device, as listed by enumerateDevices. */
+export interface AudioOutputDevice {
+  deviceId: string;
+  label: string;
+}
+
+export type FlipCameraResult = 'ok' | 'unsupported' | 'failed';
+export type ScreenShareResult = 'started' | 'stopped' | 'unsupported' | 'failed' | 'cancelled';
+
 export interface CallState {
   phase: CallPhase;
   callType: CallKind | null;
@@ -38,6 +47,12 @@ export interface CallState {
   remoteStream: MediaStream | null;
   muted: boolean;
   cameraOff: boolean;
+  /** True while the local video track is a screen-share (getDisplayMedia) track. */
+  isScreenSharing: boolean;
+  /** Audio-output devices known to the browser (labels need mic/camera permission). */
+  audioOutputs: AudioOutputDevice[];
+  /** Currently selected audio-output device id; null = browser default routing. */
+  audioOutputDeviceId: string | null;
   /** Seconds elapsed: ring time while outgoing, talk time once in-call.
    *  Maintained in a ref (no re-render); CallOverlay runs its own 1s display
    *  timer so an App-level provider never re-renders once per second. */
@@ -135,6 +150,9 @@ const IDLE_CALL: CallState = {
   remoteStream: null,
   muted: false,
   cameraOff: false,
+  isScreenSharing: false,
+  audioOutputs: [],
+  audioOutputDeviceId: null,
   seconds: 0,
   error: null,
 };
@@ -201,6 +219,14 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
   const iceRestartedRef = useRef(false);
   /** Grace timer for transient 'disconnected' states before we treat them as failure. */
   const disconnectGraceRef = useRef<number | null>(null);
+  /** Which camera the local video track currently uses (for flip + share restore). */
+  const facingModeRef = useRef<'user' | 'environment'>('user');
+  /** The active getDisplayMedia stream while screen sharing (stopped on toggle-off/end). */
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  /** Self-mirror so the display track's onended handler can toggle sharing off. */
+  const toggleScreenShareRef = useRef<() => Promise<ScreenShareResult>>(
+    async () => 'unsupported' as ScreenShareResult,
+  );
 
   currentUserRef.current = currentUser;
   conversationsRef.current = conversations;
@@ -331,6 +357,11 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     iceRestartedRef.current = false;
     acceptInFlightRef.current = false;
     pendingIceRef.current = [];
+    if (displayStreamRef.current) {
+      stopTracks(displayStreamRef.current);
+      displayStreamRef.current = null;
+    }
+    facingModeRef.current = 'user';
     stopTracks(localStreamRef.current);
     localStreamRef.current = null;
     // Remote tracks belong to the peer; closing the PC releases them.
@@ -402,6 +433,71 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       }
     }
   }, []);
+
+  // ---- audio-output (speaker) devices ----
+  // The web platform can only route audio to a different output where the
+  // browser implements HTMLMediaElement.setSinkId (Chrome/Edge desktop +
+  // Android; NOT iOS Safari). The overlay applies the selected device id to
+  // the remote elements; the machine only tracks the list + the choice.
+  const AUDIO_OUTPUT_STORAGE_KEY = 'pawmatch.audioOutputDeviceId';
+
+  const refreshAudioOutputs = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outs: AudioOutputDevice[] = devices
+        .filter((d) => d.kind === 'audiooutput')
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Audio output ${i + 1}`,
+        }));
+      const prev = stateRef.current.audioOutputs;
+      const same =
+        prev.length === outs.length &&
+        prev.every((p, i) => p.deviceId === outs[i]?.deviceId && p.label === outs[i]?.label);
+      let chosen = stateRef.current.audioOutputDeviceId;
+      if (!outs.some((o) => o.deviceId === chosen)) {
+        // Current choice vanished (or never set): prefer the persisted one.
+        let persisted: string | null = null;
+        try {
+          persisted = localStorage.getItem(AUDIO_OUTPUT_STORAGE_KEY);
+        } catch {
+          /* storage unavailable */
+        }
+        chosen = outs.some((o) => o.deviceId === persisted) ? persisted : null;
+      }
+      if (!same || chosen !== stateRef.current.audioOutputDeviceId) {
+        patch({ audioOutputs: outs, audioOutputDeviceId: chosen });
+      }
+    } catch {
+      /* enumerateDevices can throw when permissions are revoked mid-call */
+    }
+  }, [patch]);
+
+  /** Persist the user's speaker choice; the overlay applies it via setSinkId. */
+  const setAudioOutputDevice = useCallback(
+    (deviceId: string) => {
+      try {
+        localStorage.setItem(AUDIO_OUTPUT_STORAGE_KEY, deviceId);
+      } catch {
+        /* storage unavailable — choice just won't persist */
+      }
+      patch({ audioOutputDeviceId: deviceId });
+    },
+    [patch],
+  );
+
+  // Keep the device list fresh while the hook lives (plugging in a headset
+  // mid-call should offer it). Labels only appear after mic/camera permission.
+  useEffect(() => {
+    const md = navigator.mediaDevices;
+    if (!md?.addEventListener) return;
+    const onChange = () => {
+      void refreshAudioOutputs();
+    };
+    md.addEventListener('devicechange', onChange);
+    return () => md.removeEventListener('devicechange', onChange);
+  }, [refreshAudioOutputs]);
 
   const createPeerConnection = useCallback(
     (peerId: string, convId: string): RTCPeerConnection => {
@@ -919,6 +1015,8 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
             return;
           }
           setLocalStream(stream);
+          // Permission is granted now, so device labels are available.
+          void refreshAudioOutputs();
           sendSignal(conversationId, {
             ...basePayload(conversationId, peerId, 'invite'),
             callType,
@@ -954,6 +1052,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       handleNoAnswer,
       noAnswerMs,
       patch,
+      refreshAudioOutputs,
       sendSignal,
       sendUserInvite,
       setLocalStream,
@@ -977,6 +1076,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
           return;
         }
         setLocalStream(stream);
+        void refreshAudioOutputs();
         // PeerConnection is created when the caller's offer arrives.
         sendSignal(st.conversationId!, basePayload(st.conversationId!, st.peerId!, 'accept'));
       })
@@ -988,7 +1088,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       .finally(() => {
         acceptInFlightRef.current = false;
       });
-  }, [acquireMedia, basePayload, patch, sendSignal, setLocalStream, teardown]);
+  }, [acquireMedia, basePayload, patch, refreshAudioOutputs, sendSignal, setLocalStream, teardown]);
 
   const declineCall = useCallback(() => {
     if (stateRef.current.phase !== 'incoming') return;
@@ -1013,6 +1113,154 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     patch({ cameraOff });
   }, [patch]);
 
+  /**
+   * Flip between front and back cameras (video calls). Swaps the video track
+   * on the live RTCRtpSender via replaceTrack — no renegotiation, the remote
+   * side keeps seeing video throughout. The old camera track is stopped.
+   */
+  const flipCamera = useCallback(async (): Promise<FlipCameraResult> => {
+    const st = stateRef.current;
+    if (st.callType !== 'video' || st.isScreenSharing) return 'unsupported';
+    if (!navigator.mediaDevices?.getUserMedia) return 'unsupported';
+    const stream = localStreamRef.current;
+    const oldVideo = stream?.getVideoTracks()[0];
+    if (!stream || !oldVideo) return 'failed';
+    const pc = pcRef.current;
+    const sender = pc?.getSenders().find((s) => s.track && s.track.kind === 'video');
+    const nextFacing = facingModeRef.current === 'user' ? 'environment' : 'user';
+    // Try the exact facing mode first (fails on single-camera devices),
+    // then fall back to a soft preference.
+    const attempts: Array<MediaTrackConstraints['facingMode']> = [
+      { exact: nextFacing },
+      nextFacing,
+    ];
+    let newVideo: MediaStreamTrack | null = null;
+    for (const fm of attempts) {
+      try {
+        const ns = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: fm, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        newVideo = ns.getVideoTracks()[0] ?? null;
+        if (newVideo) break;
+      } catch {
+        /* try the softer constraint next */
+      }
+    }
+    if (!newVideo) return 'failed';
+    try {
+      if (sender) await sender.replaceTrack(newVideo);
+    } catch {
+      try {
+        newVideo.stop();
+      } catch {
+        /* ignore */
+      }
+      return 'failed';
+    }
+    try {
+      oldVideo.stop();
+    } catch {
+      /* already stopped */
+    }
+    newVideo.enabled = !stateRef.current.cameraOff;
+    facingModeRef.current = nextFacing;
+    // Rebuild the local stream around the ORIGINAL mic track so the remote
+    // side's audio is untouched and the local preview updates in one step.
+    const combined = new MediaStream([...stream.getAudioTracks(), newVideo]);
+    setLocalStream(combined);
+    return 'ok';
+  }, [setLocalStream]);
+
+  /**
+   * Screen sharing for video calls (desktop browsers via getDisplayMedia).
+   * Shares the screen as the video track (mic stays live); toggling off —
+   * or the user stopping via the browser's own UI — restores the camera.
+   */
+  const toggleScreenShare = useCallback(async (): Promise<ScreenShareResult> => {
+    const st = stateRef.current;
+    if (st.callType !== 'video') return 'unsupported';
+    const md = navigator.mediaDevices as
+      | (MediaDevices & {
+          getDisplayMedia?: (constraints?: DisplayMediaStreamOptions) => Promise<MediaStream>;
+        })
+      | undefined;
+
+    // ---- stop: restore the camera ----
+    if (st.isScreenSharing) {
+      const disp = displayStreamRef.current;
+      displayStreamRef.current = null;
+      if (disp) stopTracks(disp);
+      try {
+        const cam = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: facingModeRef.current,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+        const camVideo = cam.getVideoTracks()[0];
+        const pc = pcRef.current;
+        const sender = pc?.getSenders().find((s) => s.track && s.track.kind === 'video');
+        if (camVideo && sender) await sender.replaceTrack(camVideo);
+        if (camVideo) {
+          camVideo.enabled = !stateRef.current.cameraOff;
+          const audioTracks = localStreamRef.current?.getAudioTracks() ?? [];
+          setLocalStream(new MediaStream([...audioTracks, camVideo]));
+        }
+      } catch {
+        /* camera restore failed — sharing is still off, mic still live */
+      }
+      patch({ isScreenSharing: false });
+      return 'stopped';
+    }
+
+    // ---- start ----
+    if (!md?.getDisplayMedia) return 'unsupported';
+    let disp: MediaStream;
+    try {
+      disp = await md.getDisplayMedia({ video: true, audio: false });
+    } catch (e) {
+      // The user cancelling the picker is not an error — stay silent.
+      return e instanceof DOMException && e.name === 'NotAllowedError' ? 'cancelled' : 'failed';
+    }
+    const dispVideo = disp.getVideoTracks()[0];
+    if (!dispVideo) {
+      stopTracks(disp);
+      return 'failed';
+    }
+    const pc = pcRef.current;
+    const sender = pc?.getSenders().find((s) => s.track && s.track.kind === 'video');
+    const oldVideo = localStreamRef.current?.getVideoTracks()[0];
+    try {
+      if (sender) await sender.replaceTrack(dispVideo);
+    } catch {
+      stopTracks(disp);
+      return 'failed';
+    }
+    if (oldVideo) {
+      try {
+        oldVideo.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    displayStreamRef.current = disp;
+    dispVideo.enabled = !stateRef.current.cameraOff;
+    const audioTracks = localStreamRef.current?.getAudioTracks() ?? [];
+    setLocalStream(new MediaStream([...audioTracks, dispVideo]));
+    // Browser-native "stop sharing" must also restore the camera.
+    dispVideo.onended = () => {
+      void toggleScreenShareRef.current();
+    };
+    patch({ isScreenSharing: true });
+    return 'started';
+  }, [patch, setLocalStream]);
+
+  // Mirror for the display track's onended handler (avoids a stale closure).
+  toggleScreenShareRef.current = toggleScreenShare;
+
   // DEV-ONLY test hook (stripped from production builds by import.meta.env.DEV):
   // lets the headless two-client call test read the live RTCPeerConnection
   // state and track inventories, following the existing __pawInjectReceived
@@ -1027,6 +1275,9 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       iceConnectionState: pcRef.current?.iceConnectionState ?? null,
       localTracks: localStreamRef.current?.getTracks().map((t) => t.kind) ?? [],
       remoteTracks: remoteStreamRef.current?.getTracks().map((t) => t.kind) ?? [],
+      isScreenSharing: stateRef.current.isScreenSharing,
+      facingMode: facingModeRef.current,
+      audioOutputs: stateRef.current.audioOutputs.length,
     });
   }
 
@@ -1040,5 +1291,12 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     endCall,
     toggleMute,
     toggleCamera,
+    /** Front/back camera swap for video calls (no renegotiation). */
+    flipCamera,
+    /** Screen sharing for video calls (desktop browsers). */
+    toggleScreenShare,
+    /** Speaker/output routing (only where the browser supports setSinkId). */
+    setAudioOutputDevice,
+    refreshAudioOutputs,
   };
 }
