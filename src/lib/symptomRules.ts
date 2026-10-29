@@ -1,5 +1,9 @@
 /**
- * Pet Symptom Checker — pure rule engine.
+ * Pet Symptom Checker — pure rule engine. (v2, 30 Oct 2026 — changes driven
+ * by the benchmark evaluation in the research-paper project: duration 2–3
+ * days scores +2 (persistence ≥48h); avian respiratory-distress cluster is
+ * an emergency; species floors for bird tail-bobbing / loss of balance,
+ * rabbit head tilt, and cat appetite loss > 3 days.)
  *
  * Everything here is deterministic, species-aware triage GUIDANCE, never a
  * diagnosis. Urgency levels:
@@ -608,6 +612,19 @@ export function evaluateCheck(input: CheckInput): CheckResult {
       emergencyReasons.push(combo.reason);
     }
   }
+  // v2: avian respiratory-distress cluster — tail bobbing (laboured breathing)
+  // combined with other illness signs or a severe presentation is an emergency.
+  if (
+    species === 'bird' &&
+    symptomIds.includes('tail-bobbing') &&
+    (symptomIds.includes('fluffed-feathers') ||
+      symptomIds.includes('loss-of-balance') ||
+      severity === 'severe')
+  ) {
+    emergencyReasons.push(
+      'Tail bobbing with other signs of illness in a bird signals respiratory distress — this is an emergency.',
+    );
+  }
 
   let urgency: UrgencyLevel;
   if (emergencyReasons.length > 0) {
@@ -618,7 +635,7 @@ export function evaluateCheck(input: CheckInput): CheckResult {
     let score = 0;
     if (severity === 'moderate') score += 1;
     if (severity === 'severe') score += 3;
-    if (duration === 'd2_3') score += 1;
+    if (duration === 'd2_3') score += 2; // v2: persistence ≥48h warrants assessment (was +1 in v1)
     if (duration === 'gt3d') score += 2;
     if (defs.length >= 3) score += 1;
     const hasV = symptomIds.includes('vomiting');
@@ -634,6 +651,16 @@ export function evaluateCheck(input: CheckInput): CheckResult {
     // Hard escalations regardless of score
     if (severity === 'severe') urgency = 'vetToday'; // severe always means "see a vet today" (red flags go above to emergency)
     if (duration === 'gt3d' && urgency === 'monitor') urgency = 'vet24h';
+
+    // v2: species-aware floors — prompt-care signs the scoring matrix under-weights
+    const FLOOR_ORDER: Record<UrgencyLevel, number> = { monitor: 0, vet24h: 1, vetToday: 2, emergency: 3 };
+    const raiseTo = (floor: UrgencyLevel) => {
+      if (FLOOR_ORDER[urgency] < FLOOR_ORDER[floor]) urgency = floor;
+    };
+    if (species === 'bird' && symptomIds.includes('tail-bobbing')) raiseTo('vetToday');
+    if (species === 'bird' && symptomIds.includes('loss-of-balance')) raiseTo('vet24h');
+    if (species === 'rabbit' && symptomIds.includes('head-tilt')) raiseTo('vet24h');
+    if (species === 'cat' && symptomIds.includes('appetite-loss') && duration === 'gt3d') raiseTo('vetToday');
   }
 
   // --- Summary guidance (general wording, never a diagnosis) ---
