@@ -11,6 +11,12 @@ const { spawn } = require('child_process');
 
 const VITE = 'http://127.0.0.1:3001';
 const ORIGIN = 'https://example.com';
+// SCROLLFIX2: the Hatch Chromium build refuses direct launches in some
+// environments (its WebGL domain policy is delivered by browser-daemon).
+// PAW_CHROME lets the harness run against any stock Chromium (e.g. the
+// Playwright build in ~/.cache/ms-playwright) with identical CDP logic.
+// Default is unchanged.
+const CHROME_BIN = process.env.PAW_CHROME || '/opt/meta-chromium/chrome';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function httpPutJson(url) {
@@ -141,7 +147,7 @@ async function launch({ port = 9341, width = 1366, height = 600, profile = '/tmp
     `--window-size=${width},${height}`,
     'about:blank',
   ];
-  const child = spawn('/opt/meta-chromium/chrome', args, { stdio: 'ignore' });
+  const child = spawn(CHROME_BIN, args, { stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try { await httpPutJson(`http://127.0.0.1:${port}/json/version`); break; }
     catch { await sleep(200); if (i === 49) throw new Error('chrome did not start'); }

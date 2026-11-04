@@ -171,10 +171,29 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
   /** Set when the user just sent a message; the next render scrolls instantly. */
   const justSentRef = useRef(false);
   /** Guards so parent state-identity churn can never ping-pong the select effects. */
-  const appliedInitialIdRef = useRef<string | undefined>(undefined);
-  const prevSelectedRef = useRef<string>('');
+  // SCROLLFIX2: a Set, not a single value. The single-value guard was
+  // defeated by an A→B→A alternation of the parent's activeConversationId:
+  // the select effect applied A, the mark-read effect reported B, the
+  // parent flipped to B, the select effect applied B, the mark-read effect
+  // reported A… ~28 flips/sec, each one an instant scroll-to-bottom.
+  const appliedExternalIdsRef = useRef<Set<string>>(new Set());
+  // SCROLLFIX2: starts at the MOUNT selection, not ''. The mark-read effect
+  // must only report genuine post-mount selection changes; firing for the
+  // initializer's fallback pick on mount made it a second selection
+  // authority racing the select effect (the measured ping-pong).
+  const prevSelectedRef = useRef<string>(selectedConvId);
   const prevConvIdRef = useRef<string>('');
   const prevSigRef = useRef<string>('');
+  /**
+   * SCROLLFIX2: the conversation id a genuine navigation is heading to — a
+   * list click, or the select effect applying an external id different from
+   * the one on screen. The auto-scroll effect may jump to the bottom on a
+   * conversation change only when the change lands on this id (or on the
+   * very first display); any other re-selection preserves the user's
+   * scroll position. Keyed by id so a mount-settle switch (initializer
+   * fallback → parent id) still gets its intended jump.
+   */
+  const navIntentForRef = useRef<string>('');
   const [showNewIndicator, setShowNewIndicator] = useState(false);
   const [unseenCount, setUnseenCount] = useState(0);
 
@@ -183,9 +202,18 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
   // handleSelectConversation always produces new array identities, which used
   // to recompute visibleConversations and refire this effect endlessly
   // (58 smooth-scrollTo re-triggers per send — the chat "jumping" bug).
+  // SCROLLFIX2: "exactly once" is now per-id for the whole mount (a Set).
+  // The old single-value guard let an A→B→A echo re-apply forever; an id
+  // that was already applied is an echo, never a fresh instruction. Fresh
+  // deep links still work: they arrive as ids never applied this mount, or
+  // after a remount (tab switch) when this set starts empty.
   useEffect(() => {
-    if (initialActiveId && appliedInitialIdRef.current !== initialActiveId) {
-      appliedInitialIdRef.current = initialActiveId;
+    if (initialActiveId && !appliedExternalIdsRef.current.has(initialActiveId)) {
+      appliedExternalIdsRef.current.add(initialActiveId);
+      if (initialActiveId !== selectedConvId) {
+        // A genuine external switch: the auto-scroll effect may jump.
+        navIntentForRef.current = initialActiveId;
+      }
       setSelectedConvId(initialActiveId);
       if (onSelectConversation) {
         onSelectConversation(initialActiveId);
@@ -202,7 +230,10 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
   }, [initialActiveId, visibleConversations]);
 
   // Mark selected conversation as read upon viewing.
-  // GUARD: only on a genuine selection change, never on parent re-renders.
+  // GUARD: only on a genuine selection change, never on parent re-renders,
+  // and never for the mount selection itself (prevSelectedRef starts at the
+  // mount value — SCROLLFIX2; the select effect already reports the mount
+  // application upward, so this effect firing for it too only started wars).
   useEffect(() => {
     if (selectedConvId && selectedConvId !== prevSelectedRef.current) {
       prevSelectedRef.current = selectedConvId;
@@ -265,6 +296,7 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
   useEffect(() => {
     const el = messagesStreamRef.current;
     const convChanged = prevConvIdRef.current !== selectedConvId;
+    const isFirstDisplay = prevConvIdRef.current === '';
     const prevSig = prevSigRef.current;
     prevConvIdRef.current = selectedConvId;
     prevSigRef.current = activeSig;
@@ -272,9 +304,17 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
       setShowNewIndicator(false);
       setUnseenCount(0);
       justSentRef.current = false;
-      if (el && currentMessages.length > 0) {
-        el.scrollTop = el.scrollHeight;
+      // SCROLLFIX2: jump to the bottom ONLY for a genuine navigation (list
+      // click or a fresh external application) or the first display. A
+      // re-selection of — or an echo back to — a conversation settles with
+      // the user's scroll position PRESERVED instead of yanking the pane.
+      const genuineNav = isFirstDisplay || navIntentForRef.current === selectedConvId;
+      if (navIntentForRef.current === selectedConvId) navIntentForRef.current = '';
+      if (genuineNav) {
         stickToBottomRef.current = true;
+        if (el && currentMessages.length > 0) {
+          el.scrollTop = el.scrollHeight;
+        }
       }
       return;
     }
@@ -348,6 +388,9 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({
   const handleSelectConv = (convId: string) => {
     // Leaving the conversation: the receiver gets one 'stopped' event.
     notifyStopped();
+    // SCROLLFIX2: a list click is a genuine navigation — the auto-scroll
+    // effect may jump the newly opened conversation to its bottom.
+    navIntentForRef.current = convId;
     setSelectedConvId(convId);
     if (onSelectConversation) {
       onSelectConversation(convId);
