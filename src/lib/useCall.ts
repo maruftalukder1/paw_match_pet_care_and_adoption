@@ -47,6 +47,10 @@ export interface CallState {
   remoteStream: MediaStream | null;
   muted: boolean;
   cameraOff: boolean;
+  /** True when a video call fell back to audio-only because this device's
+   *  camera could not be started (busy, blocked or absent) — the overlay
+   *  says so honestly instead of silently behaving like a voice call. */
+  cameraError: boolean;
   /** True while the local video track is a screen-share (getDisplayMedia) track. */
   isScreenSharing: boolean;
   /** Audio-output devices known to the browser (labels need mic/camera permission). */
@@ -150,6 +154,7 @@ const IDLE_CALL: CallState = {
   remoteStream: null,
   muted: false,
   cameraOff: false,
+  cameraError: false,
   isScreenSharing: false,
   audioOutputs: [],
   audioOutputDeviceId: null,
@@ -551,12 +556,20 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         }
       };
       pc.ontrack = (e) => {
-        // Most browsers populate e.streams[0] for addTrack(track, stream);
-        // the fallback covers track events that arrive without a stream
-        // (seen on some mobile browsers) so the remote view never stays
-        // black despite a connected call.
-        const stream = e.streams[0] ?? (e.track ? new MediaStream([e.track]) : null);
-        if (stream) setRemoteStream(stream);
+        // Accumulate EVERY remote track into one stream (VIDEOFIX2).
+        // The previous version REPLACED the remote stream on each track
+        // event — with e.streams[0], or a fresh single-track MediaStream
+        // when e.streams was empty (some Android browsers). Track events
+        // arrive one at a time, so when the AUDIO track's event landed
+        // last, the published stream was audio-only: the call played as a
+        // voice call and the remote video stayed hidden even though the
+        // video track had arrived. Accumulating (and publishing a fresh
+        // stream identity per event so React re-renders) keeps both
+        // tracks regardless of arrival order or e.streams support.
+        if (!e.track) return;
+        const prevTracks = remoteStreamRef.current?.getTracks() ?? [];
+        if (prevTracks.includes(e.track)) return;
+        setRemoteStream(new MediaStream([...prevTracks, e.track]));
       };
       pc.onconnectionstatechange = () => {
         const state = pc.connectionState;
@@ -596,16 +609,41 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     [basePayload, clearDisconnectGrace, doEnd, sendSignal, setRemoteStream],
   );
 
-  const acquireMedia = useCallback(async (kind: CallKind): Promise<MediaStream> => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('media devices unavailable');
-    }
-    const constraints: MediaStreamConstraints =
-      kind === 'video'
-        ? { audio: true, video: { width: { ideal: 1280 }, height: { ideal: 720 } } }
-        : { audio: true, video: false };
-    return navigator.mediaDevices.getUserMedia(constraints);
-  }, []);
+  const acquireMedia = useCallback(
+    async (kind: CallKind): Promise<{ stream: MediaStream; cameraError: boolean }> => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('media devices unavailable');
+      }
+      const gum = (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c);
+      if (kind === 'audio') {
+        return { stream: await gum({ audio: true, video: false }), cameraError: false };
+      }
+      // Video cascade (VIDEOFIX2): one rejected request must not kill the
+      // call. Some phones reject the sized request (camera busy with
+      // another app, strict in-app WebView); retry with plain video, then
+      // degrade to audio-only and flag it so the overlay can say the
+      // camera failed — WhatsApp-style degradation instead of a dead call
+      // or a silent audio-only surprise.
+      try {
+        return {
+          stream: await gum({
+            audio: true,
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          }),
+          cameraError: false,
+        };
+      } catch {
+        /* retry with unconstrained video */
+      }
+      try {
+        return { stream: await gum({ audio: true, video: true }), cameraError: false };
+      } catch {
+        /* camera unusable on this device — degrade to audio-only */
+      }
+      return { stream: await gum({ audio: true, video: false }), cameraError: true };
+    },
+    [],
+  );
 
   // ---- caller: no answer within 30s ----
   const handleNoAnswer = useCallback(() => {
@@ -742,6 +780,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
             conversationId: p.convId,
             muted: false,
             cameraOff: false,
+            cameraError: false,
             seconds: 0,
             error: null,
             localStream: null,
@@ -1001,6 +1040,7 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
         conversationId,
         muted: false,
         cameraOff: false,
+        cameraError: false,
         seconds: 0,
         error: null,
         localStream: null,
@@ -1008,13 +1048,14 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
       });
       startTicker(); // ring-time timer while outgoing
       void acquireMedia(callType)
-        .then((stream) => {
+        .then(({ stream, cameraError }) => {
           // User may have cancelled while permission was pending.
           if (stateRef.current.phase !== 'outgoing') {
             stopTracks(stream);
             return;
           }
           setLocalStream(stream);
+          if (cameraError) patch({ cameraError: true });
           // Permission is granted now, so device labels are available.
           void refreshAudioOutputs();
           sendSignal(conversationId, {
@@ -1070,12 +1111,13 @@ export function useCall({ currentUser, conversations, onCallLog, overrides }: Us
     acceptInFlightRef.current = true;
     const kind = st.callType ?? 'audio';
     void acquireMedia(kind)
-      .then((stream) => {
+      .then(({ stream, cameraError }) => {
         if (stateRef.current.phase !== 'incoming') {
           stopTracks(stream);
           return;
         }
         setLocalStream(stream);
+        if (cameraError) patch({ cameraError: true });
         void refreshAudioOutputs();
         // PeerConnection is created when the caller's offer arrives.
         sendSignal(st.conversationId!, basePayload(st.conversationId!, st.peerId!, 'accept'));
