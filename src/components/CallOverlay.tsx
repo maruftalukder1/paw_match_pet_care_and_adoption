@@ -388,6 +388,11 @@ export default function CallOverlay({
               Video unavailable from {call.peerName}
             </p>
           )}
+          {call.cameraError && (
+            <p className="text-xs font-semibold text-amber-300">
+              Your camera couldn't be started — you're on audio only
+            </p>
+          )}
         </div>
       )}
       <div className="absolute left-3 top-3 rounded-full bg-black/50 px-3 py-1 text-xs font-semibold text-white">
@@ -415,7 +420,9 @@ export default function CallOverlay({
           >
             <VideoOff className="h-5 w-5 text-slate-500" />
             {!hasLocalVideo && (
-              <span className="text-[9px] leading-tight text-slate-400">Camera off</span>
+              <span className="text-[9px] leading-tight text-slate-400">
+                {call.cameraError ? 'Camera unavailable' : 'Camera off'}
+              </span>
             )}
           </div>
         )}
